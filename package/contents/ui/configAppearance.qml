@@ -26,8 +26,14 @@ KCM.SimpleKCM {
         property string value
         property color themeColor
         signal picked(string v)
+        // ColorButton assigns its own colour when a colour is picked, which would break a binding;
+        // so the swatch is set explicitly whenever the setting (or the theme) changes.
+        function sync() { button.color = setting.value ? setting.value : setting.themeColor; }
+        onValueChanged: sync()
+        onThemeColorChanged: sync()
+        Component.onCompleted: sync()
         KQuickControls.ColorButton {
-            color: setting.value ? setting.value : setting.themeColor
+            id: button
             onAccepted: (c) => setting.picked(c.toString())
         }
         QQC2.Button {

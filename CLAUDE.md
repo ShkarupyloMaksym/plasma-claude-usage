@@ -20,6 +20,15 @@ Status (newest last; dated, never rewritten: strike and annotate instead):
   theme reference instead of the applet's inherited highlight colour. Tests: `make check` (a broken
   copy fails it, the real one passes in both orientations); plasmoidviewer prints no QML errors on
   stderr, so don't rely on its silence. Settings pages: only qmllint-checked.
+  Also fixed before release: a plasmashell crash on opening the popup (Repeaters rebuilt their rows
+  inside a layout on every refresh; they now take a count) and a notification double free.
+- **2026-10-27:** v1.1.1, from a code review (10 findings, all fixed). The check keeps guards
+  (`--tools ""`, `--model haiku`, `--max-turns 1`, `--setting-sources project`; still $0, 0 turns)
+  and backs off after a failure, showing the last error meanwhile; malformed reports can't crash the
+  script; per-model limits keyed `kind:scope`; snapshot written before the check lock is released;
+  one combined notification per refresh; vertical font size; colour button "Theme" reset; errors
+  keep the tray icon visible; "Checking…" lasts until the forced check returns; `make check` uses
+  its own XDG_STATE_HOME. claude-admin's `backend/usage.py` got the same backend fixes.
 
 ## Layout
 

@@ -12,8 +12,8 @@ Where the numbers come from (newest wins):
   - the report Claude Code saves in a session transcript when you run /usage yourself;
   - anything else that writes the same snapshot file (e.g. tools that see stream-json runs).
 
-The snapshot is shared at $XDG_STATE_HOME/claude-usage/usage.json, guarded by a file lock.
-Standard library only (Python 3.9+).
+The snapshot is shared at $XDG_STATE_HOME/claude-usage/usage.json. usage.lock guards its writes
+(held briefly); usage.check.lock lets one check run at a time. Standard library only (Python 3.9+).
 """
 
 from __future__ import annotations
@@ -34,15 +34,21 @@ STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state
 FILE = STATE / "usage.json"
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
-# /usage report kinds → snapshot names. Unknown kinds (per-model weekly limits, …) keep their kind.
+# /usage report kinds → snapshot names. Other kinds (per-model weekly limits, …) are keyed by kind
+# and scope, so two limits of one kind don't overwrite each other.
 KIND_NAMES = {"session": "five_hour", "weekly_all": "seven_day"}
+
+# Guards on the check. /usage is answered locally, but if a Claude Code version ever sent it to a
+# model instead, these keep that to one tiny, tool-less Haiku turn without the user's hooks.
+CHECK_FLAGS = ["--output-format", "stream-json", "--verbose", "--no-session-persistence",
+               "--strict-mcp-config", "--tools", "", "--model", "haiku", "--max-turns", "1",
+               "--setting-sources", "project"]
 
 
 # --- snapshot file -------------------------------------------------------------------------------
 
 class Locked:
-    """An exclusive file lock in the state folder (blocking, or failing at once with nowait=True).
-    usage.lock guards writes of usage.json (held briefly); usage.check.lock lets one check run at a time."""
+    """An exclusive file lock in the state folder (blocking, or failing at once with nowait=True)."""
     def __init__(self, nowait: bool = False, name: str = "usage.lock"):
         self.nowait = nowait
         self.name = name
@@ -63,7 +69,8 @@ class Locked:
 
 def load() -> dict:
     try:
-        return json.loads(FILE.read_text())
+        snap = json.loads(FILE.read_text())
+        return snap if isinstance(snap, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -72,6 +79,12 @@ def _write(snap: dict) -> None:
     tmp = FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(snap, ensure_ascii=False, indent=2))
     tmp.replace(FILE)
+
+
+def update(**fields) -> None:
+    """Set top-level fields of the snapshot (bookkeeping: checked_transcripts, last_check, …)."""
+    with Locked():
+        _write({**load(), **fields})
 
 
 def store(windows: dict, source: str, at: float) -> None:
@@ -92,18 +105,26 @@ def iso(ts) -> float | None:
         return None
 
 
-def from_usage_report(report: dict) -> dict:
-    """Windows from a /usage report's `rate_limits.limits` list."""
+def from_usage_report(report) -> dict:
+    """Windows from a /usage report's `rate_limits.limits`. Anything malformed is skipped."""
+    rate = report.get("rate_limits") if isinstance(report, dict) else None
+    limits = rate.get("limits") if isinstance(rate, dict) else None
     windows = {}
-    for lim in ((report or {}).get("rate_limits") or {}).get("limits") or []:
-        if not isinstance(lim, dict) or lim.get("percent") is None:
+    for lim in limits if isinstance(limits, list) else []:
+        if not isinstance(lim, dict):
+            continue
+        try:
+            pct = float(lim.get("percent"))
+        except (TypeError, ValueError):
             continue
         kind = str(lim.get("kind") or "limit")
-        name = KIND_NAMES.get(kind, kind)
-        w = {"pct": float(lim["percent"]), "resets_at": iso(lim.get("resets_at")), "status": lim.get("severity")}
-        if name not in KIND_NAMES.values():  # e.g. a per-model weekly limit: say what it is
-            scope = lim.get("scope")
-            w["label"] = kind.replace("_", " ").capitalize() + (f" ({scope})" if isinstance(scope, str) else "")
+        scope = lim.get("scope") if isinstance(lim.get("scope"), str) else None
+        w = {"pct": pct, "resets_at": iso(lim.get("resets_at")), "status": lim.get("severity")}
+        if kind in KIND_NAMES:
+            name = KIND_NAMES[kind]
+        else:
+            name = kind + (f":{scope}" if scope else "")
+            w["label"] = kind.replace("_", " ").capitalize() + (f" ({scope})" if scope else "")
         windows[name] = w
     return windows
 
@@ -131,47 +152,44 @@ def scan_transcripts() -> None:
                               iso(rec.get("timestamp")) or 0)
         except OSError:
             continue
-    with Locked():
-        snap = load()
-        snap["checked_transcripts"] = now
-        _write(snap)
+    update(checked_transcripts=now)
 
 
-def check(claude: str) -> str | None:
-    """Ask Claude Code for /usage, headless. No model call, no cost. Returns an error text, or None."""
+def check(claude: str, max_age: int) -> str | None:
+    """Ask Claude Code for /usage, headless. Returns an error text, or None."""
     exe = shutil.which(os.path.expanduser(claude)) or os.path.expanduser(claude)
     try:
         lock = Locked(nowait=True, name="usage.check.lock").__enter__()
     except BlockingIOError:
         return None  # another check is running right now
-    try:
-        if time.time() - load().get("at", 0) < 15:
+    try:  # the snapshot is written before the lock is released, so a waiting check sees it
+        snap = load()
+        if time.time() - snap.get("at", 0) < 15:
             return None  # someone just checked
-        argv = [exe, "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
-                "--strict-mcp-config", "--", "/usage"]
+        update(last_check=time.time())
         with tempfile.TemporaryDirectory() as d:  # an empty folder: no CLAUDE.md, no project settings
             try:
-                r = subprocess.run(argv, cwd=d, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                   errors="replace", timeout=60)
+                r = subprocess.run([exe, "-p", *CHECK_FLAGS, "--", "/usage"], cwd=d, stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True, errors="replace", timeout=60)
             except FileNotFoundError:
                 return f"Claude Code not found ({claude}); set its path in the widget settings"
             except (OSError, subprocess.TimeoutExpired) as e:
                 return f"check failed: {e}"
-    finally:
-        lock.__exit__()
-    for line in r.stdout.splitlines():
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(ev, dict) and isinstance(ev.get("usage_report"), dict):
-            windows = from_usage_report(ev["usage_report"])
-            if windows:
+        for line in r.stdout.splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict) and isinstance(ev.get("usage_report"), dict):
+                windows = from_usage_report(ev["usage_report"])
+                if not windows:
+                    return "Claude Code reported no plan limits (is it logged in with a Claude subscription?)"
                 store(windows, "check", time.time())
                 return None
-            return "Claude Code reported no plan limits (is it logged in with a Claude subscription?)"
-    tail = (r.stderr.strip() or r.stdout.strip())[-200:]
-    return f"no usage report from Claude Code (exit {r.returncode}){': ' + tail if tail else ''}"
+        tail = (r.stderr.strip() or r.stdout.strip())[-200:]
+        return f"no usage report from Claude Code (exit {r.returncode}){': ' + tail if tail else ''}"
+    finally:
+        lock.__exit__()
 
 
 def main() -> None:
@@ -183,12 +201,25 @@ def main() -> None:
     ap.add_argument("--claude", default="claude", help="Claude Code executable (default: claude on PATH)")
     a = ap.parse_args()
 
-    scan_transcripts()
     error = None
-    if a.refresh or (a.auto and time.time() - load().get("at", 0) > a.max_age):
-        error = check(a.claude)
+    try:
+        scan_transcripts()
+    except Exception as e:  # noqa: BLE001 - a bad transcript must not stop the widget
+        error = f"could not read transcripts: {e}"
     snap = load()
-    snap.pop("checked_transcripts", None)
+    now = time.time()
+    stale = now - snap.get("at", 0) > a.max_age
+    # Back off after a failed check: at most one automatic attempt per max-age window.
+    recently_tried = now - snap.get("last_check", 0) < a.max_age
+    if a.refresh or (a.auto and stale and not recently_tried):
+        failed = check(a.claude, a.max_age)
+        update(last_error=failed)           # remembered, so the widget keeps showing it while backing off
+        error = failed or error
+    elif stale and recently_tried:
+        error = snap.get("last_error") or error
+    snap = load()
+    for k in ("checked_transcripts", "last_check", "last_error"):
+        snap.pop(k, None)
     if snap.get("at"):
         snap["age_seconds"] = round(time.time() - snap["at"])
     if error:

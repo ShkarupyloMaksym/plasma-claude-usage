@@ -14,7 +14,8 @@ PlasmoidItem {
 
     property var usage: null
     property string error: ""
-    property bool busy: false
+    property int pendingChecks: 0          // forced checks still running (re-reads don't count)
+    readonly property bool busy: pendingChecks > 0
     property real now: Date.now()          // ticks, so countdowns and staleness update between reads
     property var previous: ({})            // last seen pct / resets_at per window, for notifications
     readonly property var cfg: Plasmoid.configuration
@@ -74,8 +75,11 @@ PlasmoidItem {
         return c + " #" + Date.now(); // a unique source, so the engine runs it again
     }
     function refresh(mode) {
-        busy = true;
-        exec.connectSource(command(mode));
+        const src = command(mode);
+        // Only a forced check shows "Checking…"; the minute re-reads return in a moment and must
+        // not end that state while the real check is still running.
+        if (mode === "force") pendingChecks++;
+        exec.connectSource(src);
     }
     function span(seconds, short) {
         const mins = Math.max(0, Math.round(seconds / 60));
@@ -123,7 +127,7 @@ PlasmoidItem {
         connectedSources: []
         onNewData: (source, data) => {
             disconnectSource(source);
-            root.busy = false;
+            if (source.indexOf(" --refresh ") >= 0) root.pendingChecks = Math.max(0, root.pendingChecks - 1);
             const out = String(data["stdout"] || "").trim();
             if (data["exit code"] !== 0 || !out) {
                 const err = String(data["stderr"] || "").trim().split("\n").pop();
@@ -143,21 +147,32 @@ PlasmoidItem {
 
     function notifyChanges(u) {
         const ws = u && u.windows ? u.windows : {};
-        const prev = previous, next = {};
+        const prev = previous, next = {}, events = [];
         for (const key of Object.keys(ws)) {
             const w = ws[key], p = prev[key];
             next[key] = { pct: w.pct, resets_at: w.resets_at };
-            if (!p || !notifierLoader.item) continue;          // first reading: nothing to compare with
+            if (!p) continue;                                   // first reading: nothing to compare with
             const name = key === "five_hour" ? i18n("Session") : key === "seven_day" ? i18n("Weekly") : (w.label || key);
             if (cfg.notifyReset && w.resets_at && p.resets_at && w.resets_at > p.resets_at + 60 && p.pct >= 1) {
-                notifierLoader.item.send(i18n("Claude: %1 limit reset", name), i18n("Now at %1% used.", Math.round(w.pct)), "view-refresh", false);
+                events.push({ title: i18n("%1 limit reset", name), text: i18n("now at %1% used", Math.round(w.pct)), critical: false });
             } else if (cfg.notifyThresholds && p.pct < cfg.criticalAt && w.pct >= cfg.criticalAt) {
-                notifierLoader.item.send(i18n("Claude: %1 at %2%", name, Math.round(w.pct)), resets(w.resets_at, false), "dialog-warning", true);
+                events.push({ title: i18n("%1 at %2%", name, Math.round(w.pct)), text: resets(w.resets_at, false), critical: true });
             } else if (cfg.notifyThresholds && p.pct < cfg.warnAt && w.pct >= cfg.warnAt) {
-                notifierLoader.item.send(i18n("Claude: %1 at %2%", name, Math.round(w.pct)), resets(w.resets_at, false), "dialog-information", false);
+                events.push({ title: i18n("%1 at %2%", name, Math.round(w.pct)), text: resets(w.resets_at, false), critical: false });
             }
         }
         previous = next;
+        if (!events.length || !notifierLoader.item) return;
+        // One notification per refresh: the Notifier reuses one object, so separate sends in a row
+        // would replace each other and a critical alert could be lost.
+        const critical = events.some((e) => e.critical);
+        if (events.length === 1) {
+            notifierLoader.item.send(i18n("Claude: %1", events[0].title), events[0].text,
+                                     critical ? "dialog-warning" : "dialog-information", critical);
+        } else {
+            notifierLoader.item.send(i18n("Claude usage"), events.map((e) => e.title + " · " + e.text).join("\n"),
+                                     critical ? "dialog-warning" : "dialog-information", critical);
+        }
     }
 
     Loader {
@@ -183,7 +198,8 @@ PlasmoidItem {
     Plasmoid.icon: "speedometer"
     // In the system tray: hidden in the overflow only while there is nothing to show; asks for
     // attention at the critical level.
-    Plasmoid.status: !usage || !usage.windows ? PlasmaCore.Types.PassiveStatus
+    Plasmoid.status: error ? PlasmaCore.Types.ActiveStatus     // an error must be seen, e.g. claude not found
+                   : !usage || !usage.windows ? PlasmaCore.Types.PassiveStatus
                    : worst >= cfg.criticalAt ? PlasmaCore.Types.NeedsAttentionStatus
                    : PlasmaCore.Types.ActiveStatus
     // On the desktop with enough room, show the full view instead of the compact one.
@@ -242,7 +258,9 @@ PlasmoidItem {
     // --- on the panel ------------------------------------------------------------------------------
     compactRepresentation: MouseArea {
         id: compact
-        readonly property real fontPx: root.vertical ? Kirigami.Theme.smallFont.pixelSize : compact.height * 0.38
+        // Theme fonts are set in points, so smallFont.pixelSize is -1; derive pixels instead.
+        readonly property real fontPx: root.vertical ? Math.max(8, Math.round(Kirigami.Units.gridUnit * 0.6))
+                                                     : Math.max(8, compact.height * 0.38)
         Layout.minimumWidth: root.vertical ? -1 : grid.implicitWidth + Kirigami.Units.smallSpacing * 2
         Layout.preferredWidth: Layout.minimumWidth
         Layout.minimumHeight: root.vertical ? grid.implicitHeight + Kirigami.Units.smallSpacing * 2 : -1
