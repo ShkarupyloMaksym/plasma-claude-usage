@@ -57,6 +57,22 @@ PlasmoidItem {
         if (p >= cfg.warnAt) return cfg.warnColor || themeRef.Kirigami.Theme.neutralTextColor;
         return cfg.normalColor || themeRef.Kirigami.Theme.positiveTextColor;
     }
+    // Colour of the percent text: the theme's text colour, the bar's level colour, or a custom one.
+    function textColor(p, fallback) {
+        if (cfg.textColorMode === 1) return color(p);
+        if (cfg.textColorMode === 2 && cfg.textColor) return cfg.textColor;
+        return fallback;
+    }
+    // The S / W label, or the user's own.
+    function shortLabel(x) {
+        if (x.key === "five_hour" && cfg.sessionLabel) return cfg.sessionLabel;
+        if (x.key === "seven_day" && cfg.weeklyLabel) return cfg.weeklyLabel;
+        return x.short;
+    }
+    // The panel text for one limit, from the user's format ({pct}, {label}).
+    function panelText(x) {
+        return (cfg.textFormat || "{pct}%").replace(/\{pct\}/g, shown(x.w.pct)).replace(/\{label\}/g, shortLabel(x));
+    }
 
     // --- helpers ---------------------------------------------------------------------------------
     function shown(p) { return Math.round(cfg.showRemaining ? 100 - p : p); }
@@ -259,8 +275,9 @@ PlasmoidItem {
     compactRepresentation: MouseArea {
         id: compact
         // Theme fonts are set in points, so smallFont.pixelSize is -1; derive pixels instead.
-        readonly property real fontPx: root.vertical ? Math.max(8, Math.round(Kirigami.Units.gridUnit * 0.6))
-                                                     : Math.max(8, compact.height * 0.38)
+        readonly property real fontPx: root.cfg.textSize > 0 ? root.cfg.textSize
+                                     : root.vertical ? Math.max(8, Math.round(Kirigami.Units.gridUnit * 0.6))
+                                     : Math.max(8, compact.height * 0.38)
         Layout.minimumWidth: root.vertical ? -1 : grid.implicitWidth + Kirigami.Units.smallSpacing * 2
         Layout.preferredWidth: Layout.minimumWidth
         Layout.minimumHeight: root.vertical ? grid.implicitHeight + Kirigami.Units.smallSpacing * 2 : -1
@@ -305,8 +322,8 @@ PlasmoidItem {
                     spacing: Kirigami.Units.smallSpacing
                     Layout.alignment: Qt.AlignHCenter
                     PlasmaComponents3.Label {
-                        visible: root.cfg.showLabels && !!modelData.short
-                        text: modelData.short
+                        visible: root.cfg.showLabels && !!root.shortLabel(modelData)
+                        text: root.shortLabel(modelData)
                         opacity: 0.7
                         font.pixelSize: compact.fontPx
                     }
@@ -319,9 +336,9 @@ PlasmoidItem {
                     }
                     PlasmaComponents3.Label {
                         visible: root.cfg.displayStyle !== 2 || root.vertical
-                        text: root.shown(modelData.w.pct) + "%"
-                        color: root.color(modelData.w.pct)
-                        font.bold: true
+                        text: root.panelText(modelData)
+                        color: root.textColor(modelData.w.pct, Kirigami.Theme.textColor)
+                        font.bold: root.cfg.textBold
                         font.pixelSize: compact.fontPx
                     }
                     PlasmaComponents3.Label {
@@ -355,8 +372,8 @@ PlasmoidItem {
                     PlasmaComponents3.Label { text: modelData.label; Layout.fillWidth: true; elide: Text.ElideRight }
                     PlasmaComponents3.Label {
                         text: root.cfg.showRemaining ? i18n("%1% left", root.shown(modelData.w.pct)) : i18n("%1% used", root.shown(modelData.w.pct))
-                        color: root.color(modelData.w.pct)
-                        font.bold: true
+                        color: root.textColor(modelData.w.pct, Kirigami.Theme.textColor)
+                        font.bold: root.cfg.textBold
                     }
                 }
                 UsageBar {

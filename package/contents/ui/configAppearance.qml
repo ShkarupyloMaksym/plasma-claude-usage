@@ -19,6 +19,13 @@ KCM.SimpleKCM {
     property string cfg_normalColor
     property string cfg_warnColor
     property string cfg_criticalColor
+    property alias cfg_textSize: textSize.value
+    property alias cfg_textBold: textBold.checked
+    property alias cfg_textColorMode: textColorMode.currentIndex
+    property string cfg_textColor
+    property alias cfg_sessionLabel: sessionLabel.text
+    property alias cfg_weeklyLabel: weeklyLabel.text
+    property alias cfg_textFormat: textFormat.text
 
     // A colour setting: the theme's colour unless the user picks one.
     component ColorSetting: RowLayout {
@@ -62,6 +69,49 @@ KCM.SimpleKCM {
             Kirigami.FormData.label: i18n("Bar width (px):")
             from: 12; to: 200; stepSize: 4
             enabled: displayStyle.currentIndex !== 1
+        }
+
+        Item { Kirigami.FormData.isSection: true }
+
+        RowLayout {
+            Kirigami.FormData.label: i18n("Text size (px):")
+            QQC2.SpinBox { id: textSize; from: 0; to: 48 }
+            QQC2.Label { text: textSize.value === 0 ? i18n("automatic") : ""; opacity: 0.7 }
+        }
+        QQC2.CheckBox { id: textBold; text: i18n("Bold percent") }
+        QQC2.ComboBox {
+            id: textColorMode
+            Kirigami.FormData.label: i18n("Text colour:")
+            model: [i18n("Theme text colour"), i18n("Same as the bar (by usage level)"), i18n("Custom")]
+        }
+        ColorSetting {
+            Kirigami.FormData.label: i18n("Custom text colour:")
+            visible: textColorMode.currentIndex === 2
+            value: cfg_textColor
+            themeColor: Kirigami.Theme.textColor
+            onPicked: (v) => cfg_textColor = v
+        }
+        QQC2.TextField {
+            id: sessionLabel
+            Kirigami.FormData.label: i18n("Session label:")
+            placeholderText: i18nc("short for session", "S")
+        }
+        QQC2.TextField {
+            id: weeklyLabel
+            Kirigami.FormData.label: i18n("Weekly label:")
+            placeholderText: i18nc("short for weekly", "W")
+        }
+        QQC2.TextField {
+            id: textFormat
+            Kirigami.FormData.label: i18n("Panel text:")
+            placeholderText: "{pct}%"
+        }
+        QQC2.Label {
+            text: i18n("{pct} is the percent, {label} the label. Example: \"{label}: {pct}%\" (then turn off Labels above).")
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+            opacity: 0.7
+            font: Kirigami.Theme.smallFont
         }
 
         Item { Kirigami.FormData.isSection: true }

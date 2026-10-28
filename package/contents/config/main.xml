@@ -20,6 +20,15 @@
     <entry name="normalColor" type="String"><default></default></entry>
     <entry name="warnColor" type="String"><default></default></entry>
     <entry name="criticalColor" type="String"><default></default></entry>
+    <!-- Panel text: size 0 = automatic; colour mode 0 = theme text, 1 = by usage level, 2 = custom -->
+    <entry name="textSize" type="Int"><default>0</default></entry>
+    <entry name="textBold" type="Bool"><default>false</default></entry>
+    <entry name="textColorMode" type="Int"><default>0</default></entry>
+    <entry name="textColor" type="String"><default></default></entry>
+    <!-- Empty label = the default (S / W); format placeholders: {pct}, {label} -->
+    <entry name="sessionLabel" type="String"><default></default></entry>
+    <entry name="weeklyLabel" type="String"><default></default></entry>
+    <entry name="textFormat" type="String"><default>{pct}%</default></entry>
     <!-- Updates -->
     <entry name="autoCheck" type="Bool"><default>true</default></entry>
     <entry name="maxAgeMinutes" type="Int"><default>5</default></entry>

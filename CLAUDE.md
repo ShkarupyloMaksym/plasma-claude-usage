@@ -29,6 +29,10 @@ Status (newest last; dated, never rewritten: strike and annotate instead):
   one combined notification per refresh; vertical font size; colour button "Theme" reset; errors
   keep the tray icon visible; "Checking…" lasts until the forced check returns; `make check` uses
   its own XDG_STATE_HOME. claude-admin's `backend/usage.py` got the same backend fixes.
+- **2026-10-28:** v1.2.0. Panel text settings (Appearance → text section): size
+  (0 = automatic), bold (off by default), text colour (theme text by default / bar's level colour /
+  custom), editable S/W labels, panel text format with `{pct}` and `{label}`. Lint and `make check` pass;
+  not yet looked at on the real panel.
 
 ## Layout
 
